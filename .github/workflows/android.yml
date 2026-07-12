@@ -1,7 +1,7 @@
 name: Build APK
 
 on:
-  workflow_dispatch: # 允许手动触发编译
+  workflow_dispatch: # 允许在 GitHub 页面上手动点击触发编译
 
 jobs:
   build:
@@ -18,24 +18,52 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
-    # 1. 自动配置 Android SDK 和 FongMi 项目所需的特定 NDK 编译环境
-    - name: Setup Android SDK & NDK
+    # 1. 预装 Python3 环境及 venv 组件（FongMi 项目的 Python 爬虫编译强依赖此环境）
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Install Python Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-venv python3-pip
+
+    # 2. 自动配置完整的 Android SDK 与 NDK 底层工具链
+    - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    # 2. 修复你刚刚遇到的 local.properties 缺失报错
-    - name: Create Mock local.properties
+    # 3. 饱和式注入 local.properties，彻底根除 "Cannot convert 'null' to File" 报错
+    - name: Create Complete local.properties
       run: |
         touch local.properties
+        # 写入 SDK 路径
         echo "sdk.dir=$ANDROID_HOME" >> local.properties
+        
+        # 虚拟一个本地密钥文件，防止 build.gradle 在第 54 行读取路径时报 null 崩溃
+        touch mock.jks
+        echo "storeFile=../mock.jks" >> local.properties
+        echo "storePassword=android" >> local.properties
+        echo "keyAlias=androiddebugkey" >> local.properties
+        echo "keyPassword=android" >> local.properties
+        
+        # 兼容部分版本可能读取的特殊变量名
+        echo "RELEASE_STORE_FILE=../mock.jks" >> local.properties
+        echo "RELEASE_STORE_PASSWORD=android" >> local.properties
+        echo "RELEASE_KEY_ALIAS=androiddebugkey" >> local.properties
+        echo "RELEASE_KEY_PASSWORD=android" >> local.properties
+        
+        echo "=== 检查生成的 local.properties 配置文件 ==="
+        cat local.properties
 
-    # 3. 规避签名报错：FongMi 默认的 release 编译通常强制要求配置签名文件。
-    # 这里直接改用快捷的 assembleDebug 编译，既不需要配置复杂的密钥，打包出来的 APK 也能完美安装运行。
+    # 4. 执行正式编译（使用 assembleDebug 绕过正式签名的强制校验，产物功能完全一致）
     - name: Build with Gradle
       run: ./gradlew assembleDebug --stacktrace
 
+    # 5. 将打包好的 APK 上传到 GitHub，供你下载
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
