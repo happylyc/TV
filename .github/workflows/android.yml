@@ -59,13 +59,13 @@ jobs:
         echo "=== 检查生成的 local.properties 配置文件 ==="
         cat local.properties
 
-    # 4. 执行正式编译（使用 assembleDebug 绕过正式签名的强制校验，产物功能完全一致）
+    # 4. 精准编译：使用 --refresh-dependencies 强制下载缺失的 media3 等库，且只编译常规电视端变体
     - name: Build with Gradle
-      run: ./gradlew assembleDebug --stacktrace
+      run: ./gradlew :app:assembleLeanbackDebug --refresh-dependencies --stacktrace
 
-    # 5. 将打包好的 APK 上传到 GitHub，供你下载
+    # 5. 上传最终精准打包出的 APK
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: FongMi-TV-APK
-        path: app/build/outputs/apk/debug/*.apk
+        path: app/build/outputs/apk/leanback/debug/*.apk
