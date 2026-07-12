@@ -18,14 +18,26 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
+    # 1. 自动配置 Android SDK 和 FongMi 项目所需的特定 NDK 编译环境
+    - name: Setup Android SDK & NDK
+      uses: android-actions/setup-android@v3
+
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    # 2. 修复你刚刚遇到的 local.properties 缺失报错
+    - name: Create Mock local.properties
+      run: |
+        touch local.properties
+        echo "sdk.dir=$ANDROID_HOME" >> local.properties
+
+    # 3. 规避签名报错：FongMi 默认的 release 编译通常强制要求配置签名文件。
+    # 这里直接改用快捷的 assembleDebug 编译，既不需要配置复杂的密钥，打包出来的 APK 也能完美安装运行。
     - name: Build with Gradle
-      run: ./gradlew assembleRelease --stacktrace
+      run: ./gradlew assembleDebug --stacktrace
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: FongMi-TV-APK
-        path: app/build/outputs/apk/release/*.apk
+        path: app/build/outputs/apk/debug/*.apk
