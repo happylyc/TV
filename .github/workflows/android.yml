@@ -13,7 +13,11 @@ jobs:
       - name: Install Python 3.10 for Chaquopy
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3.10 python3.10-venv python3.10-distutils
+          sudo apt-get install -y python3.10 python3.10-venv python3.10-distutils python3-pip
+          sudo ln -sf /usr/bin/python3.10 /usr/bin/python
+          sudo ln -sf /usr/bin/python3.10 /usr/local/bin/python3.10
+          sudo ln -sf /usr/bin/pip3 /usr/bin/pip
+          echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
           echo "PYTHON=/usr/bin/python3.10" >> $GITHUB_ENV
           echo "PYTHONHOME=/usr/bin/python3.10" >> $GITHUB_ENV
           echo "PYTHONPATH=/usr/bin/python3.10" >> $GITHUB_ENV
