@@ -1,0 +1,42 @@
+name: Build FongMi Mobile
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create local.properties + debug keystore
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "storeFile=/tmp/debug.keystore" >> local.properties
+          echo "keyAlias=androiddebugkey" >> local.properties
+          echo "storePassword=android" >> local.properties
+          echo "keyPassword=android" >> local.properties
+          keytool -genkey -v -keystore /tmp/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=,OU=,O=,L=,S=,C="
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Mobile Release
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: fongmi-mobile
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
