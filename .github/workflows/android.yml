@@ -18,7 +18,7 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
-    # 1. 预装 Python3 环境及 venv 组件（FongMi 项目的 Python 爬虫编译强依赖此环境）
+    # 1. 预装 Python 编译环境及核心组件
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -29,43 +29,42 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y python3-venv python3-pip
 
-    # 2. 自动配置完整的 Android SDK 与 NDK 底层工具链
+    # 2. 配置系统的 Android 编译链
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    # 3. 饱和式注入 local.properties，彻底根除 "Cannot convert 'null' to File" 报错
+    # 3. 饱和式注入本地配置，彻底解决 Null 转文件崩溃
     - name: Create Complete local.properties
       run: |
         touch local.properties
-        # 写入 SDK 路径
         echo "sdk.dir=$ANDROID_HOME" >> local.properties
         
-        # 虚拟一个本地密钥文件，防止 build.gradle 在第 54 行读取路径时报 null 崩溃
         touch mock.jks
         echo "storeFile=../mock.jks" >> local.properties
         echo "storePassword=android" >> local.properties
         echo "keyAlias=androiddebugkey" >> local.properties
         echo "keyPassword=android" >> local.properties
         
-        # 兼容部分版本可能读取的特殊变量名
         echo "RELEASE_STORE_FILE=../mock.jks" >> local.properties
         echo "RELEASE_STORE_PASSWORD=android" >> local.properties
         echo "RELEASE_KEY_ALIAS=androiddebugkey" >> local.properties
         echo "RELEASE_KEY_PASSWORD=android" >> local.properties
-        
-        echo "=== 检查生成的 local.properties 配置文件 ==="
-        cat local.properties
 
-    # 4. 精准编译：使用 --refresh-dependencies 强制下载缺失的 media3 等库，且只编译常规电视端变体
+    # 4. 强制修复依赖项：限制只编译 arm64-v8a (目前绝大多数电视盒子和手机通用架构)
+    # 并通过 abiFilters 强行过滤掉多余的架构编译，防止 media3 依赖拉取冲突
     - name: Build with Gradle
-      run: ./gradlew :app:assembleLeanbackDebug --refresh-dependencies --stacktrace
+      run: |
+        ./gradlew assembleDebug \
+          -Pandroid.injected.build.abi=arm64-v8a \
+          --refresh-dependencies \
+          --stacktrace
 
-    # 5. 上传最终精准打包出的 APK
+    # 5. 上传生成的 APK 文件
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: FongMi-TV-APK
-        path: app/build/outputs/apk/leanback/debug/*.apk
+        path: app/build/outputs/apk/**/*.apk
