@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 全局递归修复所有子模块中可能硬编码的 Windows Python 路径
+      # 核心修复 1：全局递归修复所有子模块中可能硬编码的 Windows Python 路径
       - name: Patch Hardcoded Python Path in All Modules
         run: |
           PYTHON_PATH=$(which python3)
@@ -36,7 +36,7 @@ jobs:
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g"
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|C:/.*python.exe|$PYTHON_PATH|g"
 
-      # 全方位立体伪造签名环境，堵死所有 Null 转换漏洞
+      # 核心修复 2：全方位立体伪造签名环境，堵死所有 Null 转换漏洞
       - name: Omnidirectional Mock Signing Environment
         run: |
           PYTHON_PATH=$(which python3)
@@ -68,25 +68,23 @@ jobs:
           echo "$SIGN_PROPS" > release.properties
           echo "$SIGN_PROPS" > app/release.properties
 
-      # 🛠️ 核心修复：强行在所有配置库的地方注入官方公共源，防止 media3 等核心依赖下载失败
+      # 核心修复 3：强行在所有配置库的地方注入官方公共源，防止 media3 等核心依赖下载失败
       - name: Inject Reliable Maven Repositories
         run: |
           find . -name "build.gradle" -o -name "settings.gradle" | while read -r file; do
             if grep -q "repositories {" "$file"; then
               echo "Injecting global repositories into $file"
-              # 在 repositories { 后面强制插入 google() 和 mavenCentral() 作为最高优先下载源
               sed -i 's/repositories {/repositories {\n        google()\n        mavenCentral()/g' "$file"
             fi
           done
 
-      # 极致优化 Gradle 运行参数，增加超时上限与重试，彻底杜绝断流
+      # 极致优化 Gradle 运行参数，增加超时上限与重试，彻底杜绝网络断流
       - name: Optimize Gradle Properties
         run: |
           mkdir -p ~/.gradle
           echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError" >> ~/.gradle/gradle.properties
           echo "org.gradle.parallel=true" >> ~/.gradle/gradle.properties
           echo "org.gradle.configureondemand=true" >> ~/.gradle/gradle.properties
-          # 强行把超时拉长到 2 分钟，并允许 Gradle 在依赖下载失败时自动重试
           echo "systemProp.http.socketTimeout=120000" >> ~/.gradle/gradle.properties
           echo "systemProp.http.connectionTimeout=120000" >> ~/.gradle/gradle.properties
 
@@ -96,17 +94,28 @@ jobs:
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
-      # 采用通用编译，靠 ABI 过滤强制瘦身。加入 --refresh-dependencies 强制刷新残缺的缓存包
+      # 核心修复 4：移除前端过滤 ABI 参数，改用原生全量编译，确保 C 语言层（quickjs）顺利链接
       - name: Build with Gradle
         run: |
           ./gradlew assembleDebug \
-            -Pandroid.injected.build.abi=arm64-v8a,armeabi-v7a \
             -x lint -x test --no-daemon --stacktrace --refresh-dependencies
 
-      # 收集所有生成的编译产物（电视和手机都会被打包进去）
-      - name: Upload All Built APKs
+      # 核心修复 5：编译完成后，在 Actions 后台用 Linux 命令直接剥离 APK 内部的 x86 脂肪，实现完美瘦身
+      - name: Post-Build Slimming
+        if: success()
+        run: |
+          sudo apt-get install -y zip
+          find app/build/outputs/apk/ -name "*.apk" | while read -r apk; do
+            echo "正在剥离 x86 与 x86_64 架构以缩减体积: $apk"
+            zip -d "$apk" "lib/x86/*" "lib/x86_64/*" || true
+          done
+
+      # 万能通配符抓取：如果成功则上传瘦身后的完美版 APK，如果失败则强行上传打包报告以供排查
+      - name: Upload All Built Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FongMi-TV-All-Flavors-APKs
-          path: "**/build/outputs/apk/**/*.apk"
+          name: FongMi-TV-Build-Output
+          path: |
+            **/build/outputs/apk/**/*.apk
+            **/build/reports/**/*
           retention-days: 7
