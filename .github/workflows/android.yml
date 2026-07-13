@@ -28,7 +28,17 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 核心修复 1：全局递归修复所有子模块中可能硬编码的 Windows Python 路径
+      # 🛠️ 核心降级：放弃系统默认的高版本 NDK，强行安装谷歌官方最稳的 LTS 21 版本以契合 C/Python 编译
+      - name: Setup Android SDK & NDK 21
+        uses: android-actions/setup-android@v3
+        with:
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install Legacy NDK
+        run: |
+          sdkmanager --install "ndk;21.4.7075529"
+
+      # 全局递归修复所有子模块中可能硬编码的 Windows Python 路径
       - name: Patch Hardcoded Python Path in All Modules
         run: |
           PYTHON_PATH=$(which python3)
@@ -36,7 +46,7 @@ jobs:
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g"
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|C:/.*python.exe|$PYTHON_PATH|g"
 
-      # 核心修复 2：全方位立体伪造签名环境，堵死所有 Null 转换漏洞
+      # 全方位立体伪造签名环境，堵死所有 Null 转换漏洞
       - name: Omnidirectional Mock Signing Environment
         run: |
           PYTHON_PATH=$(which python3)
@@ -45,7 +55,7 @@ jobs:
           
           read -r -d '' SIGN_PROPS << EOM || true
           sdk.dir=$ANDROID_HOME
-          ndk.dir=$ANDROID_HOME/ndk-bundle
+          ndk.dir=$ANDROID_HOME/ndk/21.4.7075529
           buildPython=$PYTHON_PATH
           RELEASE_STORE_FILE=mock.jks
           RELEASE_STORE_PASSWORD=mock_pwd
@@ -68,7 +78,7 @@ jobs:
           echo "$SIGN_PROPS" > release.properties
           echo "$SIGN_PROPS" > app/release.properties
 
-      # 核心修复 3：强行在所有配置库的地方注入官方公共源，防止 media3 等核心依赖下载失败
+      # 强行在所有配置库的地方注入官方公共源，防止 media3 等核心依赖下载失败
       - name: Inject Reliable Maven Repositories
         run: |
           find . -name "build.gradle" -o -name "settings.gradle" | while read -r file; do
@@ -78,7 +88,16 @@ jobs:
             fi
           done
 
-      # 极致优化 Gradle 运行参数，增加超时上限与重试，彻底杜绝网络断流
+      # 🛠️ 核心修复：强行重写所有模块的 NDK 版本声明，把整个项目的 NDK 编译基准全部拉齐到 NDK 21
+      - name: Force Align NDK Version
+        run: |
+          find . -name "build.gradle" | while read -r file; do
+            if grep -q "ndkVersion" "$file"; then
+              sed -i 's/ndkVersion.*/ndkVersion "21.4.7075529"/g' "$file"
+            fi
+          done
+
+      # 极致优化 Gradle 运行参数，增加超时上限与重试
       - name: Optimize Gradle Properties
         run: |
           mkdir -p ~/.gradle
@@ -94,13 +113,13 @@ jobs:
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
-      # 核心修复 4：移除前端过滤 ABI 参数，改用原生全量编译，确保 C 语言层（quickjs）顺利链接
+      # 全量原生编译，通过极激进的依赖刷新强推通过
       - name: Build with Gradle
         run: |
           ./gradlew assembleDebug \
             -x lint -x test --no-daemon --stacktrace --refresh-dependencies
 
-      # 核心修复 5：编译完成后，在 Actions 后台用 Linux 命令直接剥离 APK 内部的 x86 脂肪，实现完美瘦身
+      # 编译完成后，在 Actions 后台用 Linux 命令直接剥离 APK 内部的 x86 脂肪，实现完美瘦身
       - name: Post-Build Slimming
         if: success()
         run: |
@@ -110,12 +129,10 @@ jobs:
             zip -d "$apk" "lib/x86/*" "lib/x86_64/*" || true
           done
 
-      # 万能通配符抓取：如果成功则上传瘦身后的完美版 APK，如果失败则强行上传打包报告以供排查
-      - name: Upload All Built Artifacts
+      # 100% 强制抓取上传最终的 APK 产物
+      - name: Upload All Built APKs
         uses: actions/upload-artifact@v4
         with:
-          name: FongMi-TV-Build-Output
-          path: |
-            **/build/outputs/apk/**/*.apk
-            **/build/reports/**/*
+          name: FongMi-TV-Slim-APKs
+          path: "**/build/outputs/apk/**/*.apk"
           retention-days: 7
