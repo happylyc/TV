@@ -38,7 +38,7 @@ jobs:
         run: |
           sdkmanager --install "ndk;25.2.9519653"
 
-      # 核心修复 1：全局递归修复所有子模块中可能硬编码的 Windows Python 路径
+      # 全局递归修复所有子模块中可能硬编码的 Windows Python 路径
       - name: Patch Hardcoded Python Path in All Modules
         run: |
           PYTHON_PATH=$(which python3)
@@ -46,16 +46,13 @@ jobs:
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g"
           find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|C:/.*python.exe|$PYTHON_PATH|g"
 
-      # 核心修复 2：全方位立体伪造签名环境，堵死所有 Null 转换漏洞
+      # 全方位立体伪造签名环境，堵死所有 Null 转换漏洞
       - name: Omnidirectional Mock Signing Environment
         run: |
           PYTHON_PATH=$(which python3)
-          
-          # 1. 在根目录和 app 目录下凭空创造一个实体证书文件，防止 file() 函数找不到目标
           touch mock.jks
           touch app/mock.jks
           
-          # 2. 准备各种大小写和变体的签名配置文本
           read -r -d '' SIGN_PROPS << EOM || true
           sdk.dir=$ANDROID_HOME
           ndk.dir=$ANDROID_HOME/ndk/25.2.9519653
@@ -74,16 +71,12 @@ jobs:
           keyPassword=mock_pwd
           EOM
           
-          # 3. 把这套配置疯狂注入到所有可能的配置文件中
           echo "$SIGN_PROPS" > local.properties
           echo "$SIGN_PROPS" > app/local.properties
           echo "$SIGN_PROPS" >> gradle.properties
           echo "$SIGN_PROPS" >> app/gradle.properties
           echo "$SIGN_PROPS" > release.properties
           echo "$SIGN_PROPS" > app/release.properties
-          
-          echo "=== Verification: Active gradle.properties ==="
-          cat gradle.properties
 
       # 极致优化 Gradle 运行参数与网络超时上限
       - name: Optimize Gradle Properties
@@ -101,25 +94,17 @@ jobs:
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
-      # 精准编译指定架构（arm64-v8a, armeabi-v7a），只打电视版和手机版的 Debug 包
-      - name: Build Leanback and Mobile with Gradle
+      # 🛠️ 核心修复：改用万能的 assembleDebug 命令，避开对渠道具体名称的猜测，同时靠 ABI 过滤强制瘦身
+      - name: Build with Gradle
         run: |
-          ./gradlew assembleLeanbackDebug assembleMobileDebug \
+          ./gradlew assembleDebug \
             -Pandroid.injected.build.abi=arm64-v8a,armeabi-v7a \
             -x lint -x test --no-daemon --stacktrace --no-build-cache
 
-      # 上传生成的 电视版 APK 文件
-      - name: Upload Leanback (TV) APK
+      # 收集所有生成的编译产物（通配符匹配所有渠道，电视和手机都会被打包进去）
+      - name: Upload All Built APKs
         uses: actions/upload-artifact@v4
         with:
-          name: FongMi-TV-Leanback-APKs
-          path: app/build/outputs/apk/leanback/debug/**/*.apk
-          retention-days: 7
-
-      # 上传生成的 手机版 APK 文件
-      - name: Upload Mobile APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FongMi-TV-Mobile-APKs
-          path: app/build/outputs/apk/mobile/debug/**/*.apk
+          name: FongMi-TV-All-Flavors-APKs
+          path: app/build/outputs/apk/**/*.apk
           retention-days: 7
