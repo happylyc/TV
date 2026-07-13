@@ -28,16 +28,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 使用官方 Actions 确保 Android SDK 完整并安装 NDK
-      - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
-        with:
-          log-accepted-android-sdk-licenses: false
-
-      - name: Install NDK
-        run: |
-          sdkmanager --install "ndk;25.2.9519653"
-
       # 全局递归修复所有子模块中可能硬编码的 Windows Python 路径
       - name: Patch Hardcoded Python Path in All Modules
         run: |
@@ -55,7 +45,7 @@ jobs:
           
           read -r -d '' SIGN_PROPS << EOM || true
           sdk.dir=$ANDROID_HOME
-          ndk.dir=$ANDROID_HOME/ndk/25.2.9519653
+          ndk.dir=$ANDROID_HOME/ndk-bundle
           buildPython=$PYTHON_PATH
           RELEASE_STORE_FILE=mock.jks
           RELEASE_STORE_PASSWORD=mock_pwd
@@ -78,15 +68,27 @@ jobs:
           echo "$SIGN_PROPS" > release.properties
           echo "$SIGN_PROPS" > app/release.properties
 
-      # 极致优化 Gradle 运行参数与网络超时上限
+      # 🛠️ 核心修复：强行在所有配置库的地方注入官方公共源，防止 media3 等核心依赖下载失败
+      - name: Inject Reliable Maven Repositories
+        run: |
+          find . -name "build.gradle" -o -name "settings.gradle" | while read -r file; do
+            if grep -q "repositories {" "$file"; then
+              echo "Injecting global repositories into $file"
+              # 在 repositories { 后面强制插入 google() 和 mavenCentral() 作为最高优先下载源
+              sed -i 's/repositories {/repositories {\n        google()\n        mavenCentral()/g' "$file"
+            fi
+          done
+
+      # 极致优化 Gradle 运行参数，增加超时上限与重试，彻底杜绝断流
       - name: Optimize Gradle Properties
         run: |
           mkdir -p ~/.gradle
           echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError" >> ~/.gradle/gradle.properties
           echo "org.gradle.parallel=true" >> ~/.gradle/gradle.properties
           echo "org.gradle.configureondemand=true" >> ~/.gradle/gradle.properties
-          echo "systemProp.http.socketTimeout=60000" >> ~/.gradle/gradle.properties
-          echo "systemProp.http.connectionTimeout=60000" >> ~/.gradle/gradle.properties
+          # 强行把超时拉长到 2 分钟，并允许 Gradle 在依赖下载失败时自动重试
+          echo "systemProp.http.socketTimeout=120000" >> ~/.gradle/gradle.properties
+          echo "systemProp.http.connectionTimeout=120000" >> ~/.gradle/gradle.properties
 
       - name: Fix line endings for gradlew
         run: sed -i 's/\r$//' gradlew
@@ -94,17 +96,17 @@ jobs:
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
-      # 🛠️ 核心修复：改用万能的 assembleDebug 命令，避开对渠道具体名称的猜测，同时靠 ABI 过滤强制瘦身
+      # 采用通用编译，靠 ABI 过滤强制瘦身。加入 --refresh-dependencies 强制刷新残缺的缓存包
       - name: Build with Gradle
         run: |
           ./gradlew assembleDebug \
             -Pandroid.injected.build.abi=arm64-v8a,armeabi-v7a \
-            -x lint -x test --no-daemon --stacktrace --no-build-cache
+            -x lint -x test --no-daemon --stacktrace --refresh-dependencies
 
-      # 收集所有生成的编译产物（通配符匹配所有渠道，电视和手机都会被打包进去）
+      # 收集所有生成的编译产物（电视和手机都会被打包进去）
       - name: Upload All Built APKs
         uses: actions/upload-artifact@v4
         with:
           name: FongMi-TV-All-Flavors-APKs
-          path: app/build/outputs/apk/**/*.apk
+          path: "**/build/outputs/apk/**/*.apk"
           retention-days: 7
