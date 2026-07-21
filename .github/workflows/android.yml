@@ -156,11 +156,13 @@ jobs:
           echo "buildPython=$python_path" >> local.properties
           $python_path --version
 
-      - name: Generate signing keystore and configure
+      - name: Generate signing keystore and inject signingConfigs
         if: steps.check_build.outputs.build_needed == 'true'
         run: |
           echo "Generating temporary signing keystore..."
           cd src
+          
+          # 生成签名密钥
           keytool -genkey -v \
             -keystore app/fongmi.jks \
             -alias fongmi \
@@ -171,16 +173,22 @@ jobs:
             -keypass fongmi123 \
             -dname "CN=FongMi" \
             -noprompt
-          echo "storeFile=app/fongmi.jks" > keystore.properties
-          echo "storePassword=fongmi123" >> keystore.properties
-          echo "keyAlias=fongmi" >> keystore.properties
-          echo "keyPassword=fongmi123" >> keystore.properties
-          echo "RELEASE_STORE_FILE=./app/fongmi.jks" >> gradle.properties
-          echo "RELEASE_KEY_ALIAS=fongmi" >> gradle.properties
-          echo "RELEASE_STORE_PASSWORD=fongmi123" >> gradle.properties
-          echo "RELEASE_KEY_PASSWORD=fongmi123" >> gradle.properties
-          sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/' gradle.properties
-          echo "Keystore and properties configured"
+          
+          # 注入 signingConfigs 到 app/build.gradle
+          sed -i '/android {/a\
+    signingConfigs {\
+        release {\
+            storeFile file("fongmi.jks")\
+            storePassword "fongmi123"\
+            keyAlias "fongmi"\
+            keyPassword "fongmi123"\
+        }\
+    }' app/build.gradle
+          
+          echo "=== Check injected signingConfigs ==="
+          grep -A 8 "signingConfigs" app/build.gradle
+          
+          echo "Keystore generated and signingConfigs injected"
 
       - name: Build release APKs
         if: steps.check_build.outputs.build_needed == 'true'
