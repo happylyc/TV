@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   actions: write
 
 jobs:
@@ -22,38 +21,29 @@ jobs:
         shell: bash
 
     env:
-      # Build configuration
-      SOURCE_REPO: "marscyin/FongMiTV"
-      SOURCE_BRANCH: "release"
+      SOURCE_REPO: "FongMi/TV"
+      SOURCE_BRANCH: "fongmi"
       API_RETRY_COUNT: 3
       API_RETRY_DELAY: 5
 
-      # Signing configuration (from secrets)
-      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Checkout source code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPO }}
           ref: ${{ env.SOURCE_BRANCH }}
           path: src
 
-
-           
       - name: Capture commit hashes
         id: commit_info
         run: |
           cd src
           SHORT_HASH=$(git rev-parse --short HEAD)
           FULL_HASH=$(git rev-parse HEAD)
-          COMMIT_DATE=$(git log -1 --format=%cd --date=iso)
+          COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y%m%d-%H%M')
 
           echo "short_hash=$SHORT_HASH" >> "$GITHUB_OUTPUT"
           echo "full_hash=$FULL_HASH" >> "$GITHUB_OUTPUT"
@@ -69,9 +59,8 @@ jobs:
         run: |
           echo "🔍 Checking if build is needed..."
 
-          # Force build if requested via workflow dispatch
           if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
-            echo "🚀 Force build requested via workflow dispatch"
+            echo "🚀 Force build requested"
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
             echo "is_first_release=false" >> "$GITHUB_OUTPUT"
             echo "build_reason=force_build" >> "$GITHUB_OUTPUT"
@@ -95,7 +84,7 @@ jobs:
               echo "✅ Successfully fetched latest release tag: $latest_tag"
               break
             elif [ "$http_code" = "404" ]; then
-              echo "ℹ️ No releases found (404) - this will be the first release"
+              echo "ℹ️ No releases found - this will be the first release"
               latest_tag="none"
               break
             else
@@ -122,7 +111,6 @@ jobs:
           echo "📊 Comparison results:"
           echo "  Latest release tag: $latest_tag"
           echo "  Current short hash: $current_hash"
-          echo "  Commit date: ${{ steps.commit_info.outputs.commit_date }}"
 
           if [ "$latest_tag" = "none" ]; then
             echo "🆕 No previous releases found - this will be the first release"
@@ -143,7 +131,7 @@ jobs:
 
       - name: Set up JDK 17
         if: steps.check_build.outputs.build_needed == 'true'
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
@@ -161,50 +149,66 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Decode signing keystore
+      - name: Setup Android SDK
+        if: steps.check_build.outputs.build_needed == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Python
+        if: steps.check_build.outputs.build_needed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Create local.properties
         if: steps.check_build.outputs.build_needed == 'true'
         run: |
-          echo "🔐 Decoding signing keystore..."
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "❌ KEYSTORE_BASE64 secret is not set"
-            exit 1
+          cd src
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+          python_path=$(which python3)
+          if [ -z "$python_path" ]; then
+            python_path=$(which python)
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
-          if [ ! -f keystore.jks ]; then
-            echo "❌ Failed to create keystore file"
-            exit 1
-          fi
-          echo "✅ Keystore decoded successfully"
+          echo "buildPython=$python_path" >> local.properties
+          $python_path --version
 
-          
+      - name: Generate signing keystore
+        if: steps.check_build.outputs.build_needed == 'true'
+        run: |
+          echo "🔐 Generating temporary signing keystore..."
+          cd src
+          keytool -genkey -v \
+            -keystore app/fongmi.jks \
+            -alias fongmi \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass fongmi123 \
+            -keypass fongmi123 \
+            -dname "CN=FongMi" \
+            -noprompt
+          echo "✅ Keystore generated successfully"
+
       - name: Build release APKs
         if: steps.check_build.outputs.build_needed == 'true'
         run: |
           echo "🔨 Building release APKs..."
           cd src
 
-          # Verify required secrets are available
-          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "❌ Required signing secrets are missing"
-            exit 1
-          fi
-
-          # Make gradlew executable
           chmod +x gradlew
 
           # Build release APK with signing
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/keystore.jks" \
-            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$KEY_PASSWORD" \
+          ./gradlew assembleLeanbackRelease \
+            -Pandroid.injected.signing.store.file="app/fongmi.jks" \
+            -Pandroid.injected.signing.store.password="fongmi123" \
+            -Pandroid.injected.signing.key.alias="fongmi" \
+            -Pandroid.injected.signing.key.password="fongmi123" \
             --no-daemon \
             --stacktrace
             
           echo "✅ APK build completed successfully"
 
           # Clean up keystore for security
-          rm -f "$GITHUB_WORKSPACE/keystore.jks"
+          rm -f app/fongmi.jks
           echo "🔐 Keystore cleaned up"
 
       - name: Create GitHub Release
@@ -212,7 +216,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.commit_info.outputs.short_hash }}
-          name: "FongMi TV APK Release ${{ steps.commit_info.outputs.short_hash }}"
+          name: "FongMi TV ${{ steps.commit_info.outputs.short_hash }}"
           body: |
             📱 **Build Information:**
             - **Commit Hash:** [`${{ steps.commit_info.outputs.short_hash }}`](https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.commit_info.outputs.full_hash }})
@@ -220,7 +224,7 @@ jobs:
             - **Build Reason:** ${{ steps.check_build.outputs.build_reason }}
 
             📦 **Downloads:**
-            APK files are attached to this release. Choose the appropriate variant for your device.
+            APK files are attached to this release.
 
           files: src/**/build/outputs/apk/**/release/*.apk
           draft: false
@@ -238,7 +242,6 @@ jobs:
           echo "    Workflow: ${{ github.workflow }}"
           echo "    Run ID: ${{ github.run_id }}"
           echo "    Trigger: ${{ github.event_name }}"
-          echo "    Runner OS: ${{ runner.os }}"
           echo ""
           echo "📊 **Source Code Information:**"
           echo "    Source Repository: ${{ env.SOURCE_REPO }}"
@@ -255,14 +258,6 @@ jobs:
               echo "    Type: 🎉 First Release"
             else
               echo "    Type: 📦 Update Release"
-            fi
-            
-            # Check if release was created successfully
-            if [ "${{ job.status }}" = "success" ]; then
-              echo "    Release: ✅ Created Successfully"
-              echo "    Tag: ${{ steps.commit_info.outputs.short_hash }}"
-            else
-              echo "    Release: ❌ Failed to Create"
             fi
           else
             echo "    Status: ⏭️ Build Skipped"
