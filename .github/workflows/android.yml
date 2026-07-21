@@ -43,6 +43,56 @@ jobs:
           cd src
           SHORT_HASH=$(git rev-parse --short HEAD)
           FULL_HASH=$(git rev-parse HEAD)
+          COMMIT_DATE=$(git log -1 --format=%cd --` heredoc 语法在 YAML 中解析出错。用 `printf` 代替 heredoc 即可修复。
+
+以下是完整修复后的代码：
+
+```yaml
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Force build even if no changes detected"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      SOURCE_REPO: "FongMi/TV"
+      SOURCE_BRANCH: "fongmi"
+      API_RETRY_COUNT: 3
+      API_RETRY_DELAY: 5
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_BRANCH }}
+          path: src
+
+      - name: Capture commit hashes
+        id: commit_info
+        run: |
+          cd src
+          SHORT_HASH=$(git rev-parse --short HEAD)
+          FULL_HASH=$(git rev-parse HEAD)
           COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y%m%d-%H%M')
 
           echo "short_hash=$SHORT_HASH" >> "$GITHUB_OUTPUT"
@@ -189,13 +239,8 @@ jobs:
             -dname "CN=FongMi" \
             -noprompt
           
-          # 创建 keystore.properties（FongMi/TV 的 app/build.gradle 读取这个文件）
-          cat > keystore.properties << EOF
-storeFile=app/fongmi.jks
-storePassword=fongmi123
-keyAlias=fongmi
-keyPassword=fongmi123
-EOF
+          # 创建 keystore.properties（用 printf 避免 YAML heredoc 问题）
+          printf "storeFile=app/fongmi.jks\nstorePassword=fongmi123\nkeyAlias=fongmi\nkeyPassword=fongmi123\n" > keystore.properties
           
           # 同时写入 gradle.properties（备用）
           echo "RELEASE_STORE_FILE=./app/fongmi.jks" >> gradle.properties
