@@ -43,137 +43,72 @@ jobs:
           cd src
           SHORT_HASH=$(git rev-parse --short HEAD)
           FULL_HASH=$(git rev-parse HEAD)
-          COMMIT_DATE=$(git log -1 --format=%cd --` heredoc 语法在 YAML 中解析出错。用 `printf` 代替 heredoc 即可修复。
-
-以下是完整修复后的代码：
-
-```yaml
-name: Build
-
-on:
-  workflow_dispatch:
-    inputs:
-      force_build:
-        description: "Force build even if no changes detected"
-        required: false
-        default: false
-        type: boolean
-
-permissions:
-  contents: write
-  actions: write
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      SOURCE_REPO: "FongMi/TV"
-      SOURCE_BRANCH: "fongmi"
-      API_RETRY_COUNT: 3
-      API_RETRY_DELAY: 5
-
-    steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v4
-
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.SOURCE_REPO }}
-          ref: ${{ env.SOURCE_BRANCH }}
-          path: src
-
-      - name: Capture commit hashes
-        id: commit_info
-        run: |
-          cd src
-          SHORT_HASH=$(git rev-parse --short HEAD)
-          FULL_HASH=$(git rev-parse HEAD)
           COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y%m%d-%H%M')
-
           echo "short_hash=$SHORT_HASH" >> "$GITHUB_OUTPUT"
           echo "full_hash=$FULL_HASH" >> "$GITHUB_OUTPUT"
           echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
-
-          echo "✅ Source code hashes captured:"
-          echo "  Short hash: $SHORT_HASH"
-          echo "  Full hash: $FULL_HASH"
-          echo "  Commit date: $COMMIT_DATE"
+          echo "Short hash: $SHORT_HASH"
+          echo "Full hash: $FULL_HASH"
+          echo "Commit date: $COMMIT_DATE"
 
       - name: Check if build is needed
         id: check_build
         run: |
-          echo "🔍 Checking if build is needed..."
-
+          echo "Checking if build is needed..."
           if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
-            echo "🚀 Force build requested"
+            echo "Force build requested"
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
             echo "is_first_release=false" >> "$GITHUB_OUTPUT"
             echo "build_reason=force_build" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           latest_tag=""
           retry_count=0
-
           while [ $retry_count -lt $API_RETRY_COUNT ]; do
-            echo "📡 Attempting to fetch latest release (attempt $((retry_count + 1))/$API_RETRY_COUNT)..."
-            
+            echo "Fetching latest release (attempt $((retry_count + 1))/$API_RETRY_COUNT)..."
             response=$(curl -s -w "%{http_code}" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases/latest")
-            
             http_code="${response: -3}"
             json_response="${response%???}"
-            
             if [ "$http_code" = "200" ]; then
               latest_tag=$(echo "$json_response" | jq -r '.tag_name // "none"')
-              echo "✅ Successfully fetched latest release tag: $latest_tag"
+              echo "Latest release tag: $latest_tag"
               break
             elif [ "$http_code" = "404" ]; then
-              echo "ℹ️ No releases found - this will be the first release"
+              echo "No releases found"
               latest_tag="none"
               break
             else
-              echo "⚠️ API call failed with HTTP $http_code"
+              echo "API call failed with HTTP $http_code"
               retry_count=$((retry_count + 1))
               if [ $retry_count -lt $API_RETRY_COUNT ]; then
-                echo "🔄 Retrying in $API_RETRY_DELAY seconds..."
+                echo "Retrying in $API_RETRY_DELAY seconds..."
                 sleep $API_RETRY_DELAY
               fi
             fi
           done
-
           if [ $retry_count -eq $API_RETRY_COUNT ] && [ "$http_code" != "200" ] && [ "$http_code" != "404" ]; then
-            echo "❌ Failed to fetch latest release after $API_RETRY_COUNT attempts"
-            echo "🚀 Proceeding with build as fallback"
+            echo "Failed to fetch latest release, proceeding with build"
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
             echo "is_first_release=false" >> "$GITHUB_OUTPUT"
             echo "build_reason=api_failure_fallback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           current_hash="${{ steps.commit_info.outputs.short_hash }}"
-
-          echo "📊 Comparison results:"
-          echo "  Latest release tag: $latest_tag"
-          echo "  Current short hash: $current_hash"
-
+          echo "Latest release tag: $latest_tag"
+          echo "Current short hash: $current_hash"
           if [ "$latest_tag" = "none" ]; then
-            echo "🆕 No previous releases found - this will be the first release"
+            echo "No previous releases found"
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
             echo "is_first_release=true" >> "$GITHUB_OUTPUT"
             echo "build_reason=first_release" >> "$GITHUB_OUTPUT"
           elif [ "$latest_tag" != "$current_hash" ]; then
-            echo "🚀 Build needed: latest tag ($latest_tag) != current hash ($current_hash)"
+            echo "Build needed: latest tag != current hash"
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
             echo "is_first_release=false" >> "$GITHUB_OUTPUT"
             echo "build_reason=code_changes" >> "$GITHUB_OUTPUT"
           else
-            echo "⏭️ Build not needed: latest tag matches current hash"
+            echo "Build not needed: latest tag matches current hash"
             echo "build_needed=false" >> "$GITHUB_OUTPUT"
             echo "is_first_release=false" >> "$GITHUB_OUTPUT"
             echo "build_reason=no_changes" >> "$GITHUB_OUTPUT"
@@ -224,10 +159,8 @@ jobs:
       - name: Generate signing keystore and configure
         if: steps.check_build.outputs.build_needed == 'true'
         run: |
-          echo "🔐 Generating temporary signing keystore..."
+          echo "Generating temporary signing keystore..."
           cd src
-          
-          # 生成签名密钥
           keytool -genkey -v \
             -keystore app/fongmi.jks \
             -alias fongmi \
@@ -238,33 +171,27 @@ jobs:
             -keypass fongmi123 \
             -dname "CN=FongMi" \
             -noprompt
-          
-          # 创建 keystore.properties（用 printf 避免 YAML heredoc 问题）
-          printf "storeFile=app/fongmi.jks\nstorePassword=fongmi123\nkeyAlias=fongmi\nkeyPassword=fongmi123\n" > keystore.properties
-          
-          # 同时写入 gradle.properties（备用）
+          echo "storeFile=app/fongmi.jks" > keystore.properties
+          echo "storePassword=fongmi123" >> keystore.properties
+          echo "keyAlias=fongmi" >> keystore.properties
+          echo "keyPassword=fongmi123" >> keystore.properties
           echo "RELEASE_STORE_FILE=./app/fongmi.jks" >> gradle.properties
           echo "RELEASE_KEY_ALIAS=fongmi" >> gradle.properties
           echo "RELEASE_STORE_PASSWORD=fongmi123" >> gradle.properties
           echo "RELEASE_KEY_PASSWORD=fongmi123" >> gradle.properties
-          
-          # 启用 jvmargs
           sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/' gradle.properties
-          
-          echo "✅ Keystore and properties configured"
+          echo "Keystore and properties configured"
 
       - name: Build release APKs
         if: steps.check_build.outputs.build_needed == 'true'
         run: |
-          echo "🔨 Building release APKs..."
+          echo "Building release APKs..."
           cd src
           chmod +x gradlew
-          ./gradlew assembleLeanbackRelease \
-            --no-daemon \
-            --stacktrace
-          echo "✅ APK build completed successfully"
+          ./gradlew assembleLeanbackRelease --no-daemon --stacktrace
+          echo "APK build completed successfully"
           rm -f app/fongmi.jks
-          echo "🔐 Keystore cleaned up"
+          echo "Keystore cleaned up"
 
       - name: Create GitHub Release
         if: steps.check_build.outputs.build_needed == 'true'
@@ -273,14 +200,13 @@ jobs:
           tag_name: ${{ steps.commit_info.outputs.short_hash }}
           name: "FongMi TV ${{ steps.commit_info.outputs.short_hash }}"
           body: |
-            📱 **Build Information:**
-            - **Commit Hash:** [`${{ steps.commit_info.outputs.short_hash }}`](https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.commit_info.outputs.full_hash }})
-            - **Commit Date:** ${{ steps.commit_info.outputs.commit_date }}
-            - **Build Reason:** ${{ steps.check_build.outputs.build_reason }}
+            Build Information:
+            - Commit Hash: ${{ steps.commit_info.outputs.short_hash }}
+            - Commit Date: ${{ steps.commit_info.outputs.commit_date }}
+            - Build Reason: ${{ steps.check_build.outputs.build_reason }}
 
-            📦 **Downloads:**
+            Downloads:
             APK files are attached to this release.
-
           files: src/**/build/outputs/apk/**/release/*.apk
           draft: false
           prerelease: false
@@ -290,32 +216,14 @@ jobs:
       - name: Build Summary
         if: always()
         run: |
-          echo "📋 **Build Summary**"
-          echo "════════════════════════════════════════"
-          echo "🏗️ **Workflow Information:**"
-          echo "    Repository: ${{ github.repository }}"
-          echo "    Workflow: ${{ github.workflow }}"
-          echo "    Run ID: ${{ github.run_id }}"
-          echo "    Trigger: ${{ github.event_name }}"
-          echo ""
-          echo "📊 **Source Code Information:**"
-          echo "    Source Repository: ${{ env.SOURCE_REPO }}"
-          echo "    Source Branch: ${{ env.SOURCE_BRANCH }}"
-          echo "    Short Hash: ${{ steps.commit_info.outputs.short_hash }}"
-          echo "    Full Hash: ${{ steps.commit_info.outputs.full_hash }}"
-          echo "    Commit Date: ${{ steps.commit_info.outputs.commit_date }}"
-          echo ""
-          echo "🚀 **Build Status:**"
+          echo "Build Summary"
+          echo "Repository: ${{ github.repository }}"
+          echo "Source: ${{ env.SOURCE_REPO }}@${{ env.SOURCE_BRANCH }}"
+          echo "Short Hash: ${{ steps.commit_info.outputs.short_hash }}"
           if [ "${{ steps.check_build.outputs.build_needed }}" = "true" ]; then
-            echo "    Status: ✅ Build Executed"
-            echo "    Reason: ${{ steps.check_build.outputs.build_reason }}"
-            if [ "${{ steps.check_build.outputs.is_first_release }}" = "true" ]; then
-              echo "    Type: 🎉 First Release"
-            else
-              echo "    Type: 📦 Update Release"
-            fi
+            echo "Status: Build Executed"
+            echo "Reason: ${{ steps.check_build.outputs.build_reason }}"
           else
-            echo "    Status: ⏭️ Build Skipped"
-            echo "    Reason: ${{ steps.check_build.outputs.build_reason }}"
+            echo "Status: Build Skipped"
+            echo "Reason: ${{ steps.check_build.outputs.build_reason }}"
           fi
-          echo "════════════════════════════════════════"
