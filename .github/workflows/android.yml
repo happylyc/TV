@@ -189,7 +189,15 @@ jobs:
             -dname "CN=FongMi" \
             -noprompt
           
-          # 写入 gradle.properties
+          # 创建 keystore.properties（FongMi/TV 的 app/build.gradle 读取这个文件）
+          cat > keystore.properties << EOF
+storeFile=app/fongmi.jks
+storePassword=fongmi123
+keyAlias=fongmi
+keyPassword=fongmi123
+EOF
+          
+          # 同时写入 gradle.properties（备用）
           echo "RELEASE_STORE_FILE=./app/fongmi.jks" >> gradle.properties
           echo "RELEASE_KEY_ALIAS=fongmi" >> gradle.properties
           echo "RELEASE_STORE_PASSWORD=fongmi123" >> gradle.properties
@@ -198,26 +206,7 @@ jobs:
           # 启用 jvmargs
           sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/' gradle.properties
           
-          echo "✅ Keystore generated and configured"
-
-      - name: Inject signing config to build.gradle
-        if: steps.check_build.outputs.build_needed == 'true'
-        run: |
-          echo "🔧 Injecting signing config..."
-          cd src
-          
-          # 准备 signingConfigs 块（base64 编码的内容）
-          signingConfigs='ICAgIHNpZ25pbmdDb25maWdzIHtcCiAgICAgICAgaWYgKHByb2plY3QuaGFzUHJvcGVydHkoIlJFTEVBU0VfU1RPUkVfRklMRSIpKSB7XAogICAgICAgICAgICBteUNvbmZpZyB7XAogICAgICAgICAgICAgICAgc3RvcmVGaWxlIGZpbGUoUkVMRUFTRV9TVE9SRV9GSUxFKVwKICAgICAgICAgICAgICAgIHN0b3JlUGFzc3dvcmQgUkVMRUFTRV9TVE9SRV9QQVNTV09SRFwKICAgICAgICAgICAgICAgIGtleUFsaWFzIFJFTEVBU0VfS0VZX0FMSUFTXAogICAgICAgICAgICAgICAga2V5UGFzc3dvcmQgUkVMRUFTRV9LRVlfUEFTU1dPUkRcCiAgICAgICAgICAgICAgICB2MVNpZ25pbmdFbmFibGVkIHRydWVcCiAgICAgICAgICAgICAgICB2MlNpZ25pbmdFbmFibGVkIHRydWVcCiAgICAgICAgICAgICAgICBlbmFibGVWM1NpZ25pbmcgPSB0cnVlXAogICAgICAgICAgICAgICAgZW5hYmxlVjRTaWduaW5nID0gdHJ1ZVwKICAgICAgICAgICAgfVwKICAgICAgICB9XAogICAgfVwKXA=='
-          
-          signingConfig='ICAgICAgICAgICAgaWYgKHByb2plY3QuaGFzUHJvcGVydHkoIlJFTEVBU0VfU1RPUkVfRklMRSIpKSB7XAogICAgICAgICAgICAgICAgc2lnbmluZ0NvbmZpZyBzaWduaW5nQ29uZmlncy5teUNvbmZpZ1wKICAgICAgICAgICAgfVwK'
-          
-          signingConfigs="$(echo "$signingConfigs" | base64 -d)"
-          signingConfig="$(echo "$signingConfig" | base64 -d)"
-          
-          # 注入到 app/build.gradle
-          sed -i -e "/defaultConfig {/i\\$signingConfigs " -e "/debug {/a\\$signingConfig " -e "/release {/a\\$signingConfig " app/build.gradle
-          
-          echo "✅ Signing config injected"
+          echo "✅ Keystore and properties configured"
 
       - name: Build release APKs
         if: steps.check_build.outputs.build_needed == 'true'
