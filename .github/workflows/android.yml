@@ -1,191 +1,271 @@
-name: Build FongMi TV APK
+name: Build
 
 on:
-  schedule:
-    - cron: '0 13 1 * *'
   workflow_dispatch:
     inputs:
-      rebuild:
-        description: '忽略构建记录以重新构建'
+      force_build:
+        description: "Force build even if no changes detected"
         required: false
+        default: false
         type: boolean
-      donotpublish:
-        description: '构建后不提交发布新版'
-        required: false
-        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - userName: FongMi
-            repoName: TV
-            branchName: fongmi
-            java_ver: 17
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      # Build configuration
+      SOURCE_REPO: "marscyin/FongMiTV"
+      SOURCE_BRANCH: "release"
+      API_RETRY_COUNT: 3
+      API_RETRY_DELAY: 5
+
+      # Signing configuration (from secrets)
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout the repository
+        uses: actions/checkout@v5
+
+      - name: Checkout source code
+        uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_BRANCH }}
+          path: src
 
-      - name: Check New Commit
+
+           
+      - name: Capture commit hashes
+        id: commit_info
         run: |
-          upStream=https://github.com/${{ matrix.userName }}/${{ matrix.repoName }}
-          echo "upStream=$upStream" >> $GITHUB_ENV
-          
-          commit=$(curl -sL $upStream/commits/${{ matrix.branchName }} | grep -o "/${{ matrix.userName }}/${{ matrix.repoName }}/commit/[a-z0-9]\+" | head -1 | cut -d\/ -f5)
-          
-          if [[ -z "$commit" ]]; then
-            echo "方法1失败，尝试API获取..."
-            commit=$(curl -s "https://api.github.com/repos/${{ matrix.userName }}/${{ matrix.repoName }}/commits/${{ matrix.branchName }}?per_page=1" | jq -r '.sha // empty')
+          cd src
+          SHORT_HASH=$(git rev-parse --short HEAD)
+          FULL_HASH=$(git rev-parse HEAD)
+          COMMIT_DATE=$(git log -1 --format=%cd --date=iso)
+
+          echo "short_hash=$SHORT_HASH" >> "$GITHUB_OUTPUT"
+          echo "full_hash=$FULL_HASH" >> "$GITHUB_OUTPUT"
+          echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
+
+          echo "✅ Source code hashes captured:"
+          echo "  Short hash: $SHORT_HASH"
+          echo "  Full hash: $FULL_HASH"
+          echo "  Commit date: $COMMIT_DATE"
+
+      - name: Check if build is needed
+        id: check_build
+        run: |
+          echo "🔍 Checking if build is needed..."
+
+          # Force build if requested via workflow dispatch
+          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            echo "🚀 Force build requested via workflow dispatch"
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "is_first_release=false" >> "$GITHUB_OUTPUT"
+            echo "build_reason=force_build" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          
-          if [[ -z "$commit" ]]; then
-            echo "API也失败，直接克隆获取最新commit..."
-            git clone --depth=1 $upStream temp_repo
-            commit=$(cd temp_repo && git rev-parse HEAD)
-            rm -rf temp_repo
-          fi
-          
-          echo "获取到的commit: $commit"
-          
-          if [[ -z "$commit" ]]; then
-            echo "错误：无法获取commit hash"
-            exit 1
-          fi
-          
-          if ! grep -q "$commit" README.md 2>/dev/null || [ "${{ inputs.rebuild }}" == "true" ]; then
-            echo "commit=$commit" >> $GITHUB_ENV
-            echo "commitS=${commit:0:7}" >> $GITHUB_ENV
-            echo "需要构建"
-          else
-            echo "commit=$commit" >> $GITHUB_ENV
-            echo "无需构建，commit已存在"
-          fi
 
-      - name: Checkout Source Code
-        if: ${{ env.commitS }}
-        run: |
-          git clone --branch ${{ matrix.branchName }} ${{ env.upStream }} TVBox
-          cd TVBox
-          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd -1)" >> $GITHUB_ENV
+          latest_tag=""
+          retry_count=0
 
-      - name: Setup Signing
-        if: ${{ env.commitS }}
-        working-directory: TVBox
-        run: |
-          # 自动生成临时签名密钥
-          keytool -genkey -v \
-            -keystore app/fongmi.jks \
-            -alias fongmi \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass fongmi123 \
-            -keypass fongmi123 \
-            -dname "CN=FongMi" \
-            -noprompt
-          
-          # 配置签名到 gradle.properties
-          echo "RELEASE_STORE_FILE=./app/fongmi.jks" >> gradle.properties
-          echo "RELEASE_KEY_ALIAS=fongmi" >> gradle.properties
-          echo "RELEASE_STORE_PASSWORD=fongmi123" >> gradle.properties
-          echo "RELEASE_KEY_PASSWORD=fongmi123" >> gradle.properties
-
-      - uses: actions/setup-java@v4
-        if: ${{ matrix.java_ver }}
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.java_ver }}
-
-      - name: Setup Android SDK
-        if: ${{ env.commitS }}
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Python
-        if: ${{ env.commitS }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.8'
-
-      - name: Create local.properties
-        if: ${{ env.commitS }}
-        working-directory: TVBox
-        run: |
-          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
-          python_path=$(which python3)
-          if [ -z "$python_path" ]; then
-            python_path=$(which python)
-          fi
-          echo "buildPython=$python_path" >> local.properties
-          $python_path --version
-
-      - uses: gradle/actions/setup-gradle@v4
-        if: ${{ env.commitS }}
-
-      - name: Build With Gradle
-        if: ${{ env.commitS }}
-        working-directory: TVBox
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleLeanbackRelease --build-cache --parallel --daemon --warning-mode all
-
-      - name: Prepare App
-        if: ${{ env.commitS }}
-        working-directory: TVBox
-        run: |
-          rm -rf apk/
-          mkdir -p apk/
-          
-          for file in $(find app/build/outputs/apk -name "*release*.apk" -print); do
-            base=$(basename "$file")
-            new_base=$(echo "$base" | sed "s/release/${{ env.tag }}/")
-            cp "$file" "apk/$new_base"
+          while [ $retry_count -lt $API_RETRY_COUNT ]; do
+            echo "📡 Attempting to fetch latest release (attempt $((retry_count + 1))/$API_RETRY_COUNT)..."
+            
+            response=$(curl -s -w "%{http_code}" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/latest")
+            
+            http_code="${response: -3}"
+            json_response="${response%???}"
+            
+            if [ "$http_code" = "200" ]; then
+              latest_tag=$(echo "$json_response" | jq -r '.tag_name // "none"')
+              echo "✅ Successfully fetched latest release tag: $latest_tag"
+              break
+            elif [ "$http_code" = "404" ]; then
+              echo "ℹ️ No releases found (404) - this will be the first release"
+              latest_tag="none"
+              break
+            else
+              echo "⚠️ API call failed with HTTP $http_code"
+              retry_count=$((retry_count + 1))
+              if [ $retry_count -lt $API_RETRY_COUNT ]; then
+                echo "🔄 Retrying in $API_RETRY_DELAY seconds..."
+                sleep $API_RETRY_DELAY
+              fi
+            fi
           done
 
-      - name: Release Note
-        if: ${{ env.commitS }}
-        working-directory: TVBox
-        run: |
-          lastCommit=$(grep "${{ matrix.userName }}\/${{ matrix.repoName }}" ${{ github.workspace }}/README.md | grep -o '[a-z0-9]\{40\}' | head -1)
-          export LESSCHARSET=utf-8
-          echo -e "Credit: [${{ matrix.userName }}](${{ env.upStream }})\nCommit: ${{ env.commit }}\nChangelog:\n\`\`\`" > apk/${{ matrix.userName }}-Release.log
-          
-          if [ -z "$lastCommit" ]; then
-            echo "首次构建" >> apk/${{ matrix.userName }}-Release.log
-            git log --pretty=format:%B -1 | sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' | cat -n | sort -k2,2 -k1,1n | uniq -f1 | sort -k1,1n | cut -f2- >> apk/${{ matrix.userName }}-Release.log
-          elif [ "${{ env.commit }}" == "${lastCommit}" ]; then
-            git log --pretty=format:%B -1 | sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' | cat -n | sort -k2,2 -k1,1n | uniq -f1 | sort -k1,1n | cut -f2- >> apk/${{ matrix.userName }}-Release.log
-          else
-            git log --pretty=format:%B ${{ env.commitS }}...${lastCommit:0:7} | sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' | cat -n | sort -k2,2 -k1,1n | uniq -f1 | sort -k1,1n | cut -f2- >> apk/${{ matrix.userName }}-Release.log
+          if [ $retry_count -eq $API_RETRY_COUNT ] && [ "$http_code" != "200" ] && [ "$http_code" != "404" ]; then
+            echo "❌ Failed to fetch latest release after $API_RETRY_COUNT attempts"
+            echo "🚀 Proceeding with build as fallback"
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "is_first_release=false" >> "$GITHUB_OUTPUT"
+            echo "build_reason=api_failure_fallback" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo -e '\n```' >> apk/${{ matrix.userName }}-Release.log
 
-      - name: Upload App To Artifact
-        uses: actions/upload-artifact@v4
-        if: ${{ env.commitS }}
+          current_hash="${{ steps.commit_info.outputs.short_hash }}"
+
+          echo "📊 Comparison results:"
+          echo "  Latest release tag: $latest_tag"
+          echo "  Current short hash: $current_hash"
+          echo "  Commit date: ${{ steps.commit_info.outputs.commit_date }}"
+
+          if [ "$latest_tag" = "none" ]; then
+            echo "🆕 No previous releases found - this will be the first release"
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "is_first_release=true" >> "$GITHUB_OUTPUT"
+            echo "build_reason=first_release" >> "$GITHUB_OUTPUT"
+          elif [ "$latest_tag" != "$current_hash" ]; then
+            echo "🚀 Build needed: latest tag ($latest_tag) != current hash ($current_hash)"
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "is_first_release=false" >> "$GITHUB_OUTPUT"
+            echo "build_reason=code_changes" >> "$GITHUB_OUTPUT"
+          else
+            echo "⏭️ Build not needed: latest tag matches current hash"
+            echo "build_needed=false" >> "$GITHUB_OUTPUT"
+            echo "is_first_release=false" >> "$GITHUB_OUTPUT"
+            echo "build_reason=no_changes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up JDK 17
+        if: steps.check_build.outputs.build_needed == 'true'
+        uses: actions/setup-java@v5
         with:
-          name: ${{ matrix.userName }}-${{ matrix.repoName }}
+          distribution: "temurin"
+          java-version: "17"
+          cache: "gradle"
+
+      - name: Cache Gradle dependencies
+        if: steps.check_build.outputs.build_needed == 'true'
+        uses: actions/cache@v4
+        with:
           path: |
-            TVBox/apk/*
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.android/build-cache
+          key: ${{ runner.os }}-gradle-${{ hashFiles('src/**/*.gradle*', 'src/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
-      - name: Whether Or Not to Publish
-        if: ${{ inputs.donotpublish && env.commitS }}
+      - name: Decode signing keystore
+        if: steps.check_build.outputs.build_needed == 'true'
         run: |
-          echo "commit=" >> $GITHUB_ENV
+          echo "🔐 Decoding signing keystore..."
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "❌ KEYSTORE_BASE64 secret is not set"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
+          if [ ! -f keystore.jks ]; then
+            echo "❌ Failed to create keystore file"
+            exit 1
+          fi
+          echo "✅ Keystore decoded successfully"
 
-  clean:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete older workflow runs and artifacts
-        uses: Mattraks/delete-workflow-runs@main
+          
+      - name: Build release APKs
+        if: steps.check_build.outputs.build_needed == 'true'
+        run: |
+          echo "🔨 Building release APKs..."
+          cd src
+
+          # Verify required secrets are available
+          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "❌ Required signing secrets are missing"
+            exit 1
+          fi
+
+          # Make gradlew executable
+          chmod +x gradlew
+
+          # Build release APK with signing
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/keystore.jks" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD" \
+            --no-daemon \
+            --stacktrace
+            
+          echo "✅ APK build completed successfully"
+
+          # Clean up keystore for security
+          rm -f "$GITHUB_WORKSPACE/keystore.jks"
+          echo "🔐 Keystore cleaned up"
+
+      - name: Create GitHub Release
+        if: steps.check_build.outputs.build_needed == 'true'
+        uses: softprops/action-gh-release@v2
         with:
-          token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          retain_days: 14
-          keep_minimum_runs: 10
+          tag_name: ${{ steps.commit_info.outputs.short_hash }}
+          name: "FongMi TV APK Release ${{ steps.commit_info.outputs.short_hash }}"
+          body: |
+            📱 **Build Information:**
+            - **Commit Hash:** [`${{ steps.commit_info.outputs.short_hash }}`](https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.commit_info.outputs.full_hash }})
+            - **Commit Date:** ${{ steps.commit_info.outputs.commit_date }}
+            - **Build Reason:** ${{ steps.check_build.outputs.build_reason }}
+
+            📦 **Downloads:**
+            APK files are attached to this release. Choose the appropriate variant for your device.
+
+          files: src/**/build/outputs/apk/**/release/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Summary
+        if: always()
+        run: |
+          echo "📋 **Build Summary**"
+          echo "════════════════════════════════════════"
+          echo "🏗️ **Workflow Information:**"
+          echo "    Repository: ${{ github.repository }}"
+          echo "    Workflow: ${{ github.workflow }}"
+          echo "    Run ID: ${{ github.run_id }}"
+          echo "    Trigger: ${{ github.event_name }}"
+          echo "    Runner OS: ${{ runner.os }}"
+          echo ""
+          echo "📊 **Source Code Information:**"
+          echo "    Source Repository: ${{ env.SOURCE_REPO }}"
+          echo "    Source Branch: ${{ env.SOURCE_BRANCH }}"
+          echo "    Short Hash: ${{ steps.commit_info.outputs.short_hash }}"
+          echo "    Full Hash: ${{ steps.commit_info.outputs.full_hash }}"
+          echo "    Commit Date: ${{ steps.commit_info.outputs.commit_date }}"
+          echo ""
+          echo "🚀 **Build Status:**"
+          if [ "${{ steps.check_build.outputs.build_needed }}" = "true" ]; then
+            echo "    Status: ✅ Build Executed"
+            echo "    Reason: ${{ steps.check_build.outputs.build_reason }}"
+            if [ "${{ steps.check_build.outputs.is_first_release }}" = "true" ]; then
+              echo "    Type: 🎉 First Release"
+            else
+              echo "    Type: 📦 Update Release"
+            fi
+            
+            # Check if release was created successfully
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "    Release: ✅ Created Successfully"
+              echo "    Tag: ${{ steps.commit_info.outputs.short_hash }}"
+            else
+              echo "    Release: ❌ Failed to Create"
+            fi
+          else
+            echo "    Status: ⏭️ Build Skipped"
+            echo "    Reason: ${{ steps.check_build.outputs.build_reason }}"
+          fi
+          echo "════════════════════════════════════════"
