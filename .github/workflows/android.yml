@@ -188,26 +188,27 @@ jobs:
             -noprompt
           echo "✅ Keystore generated successfully"
 
+      - name: Configure signing
+        if: steps.check_build.outputs.build_needed == 'true'
+        run: |
+          echo "🔧 Configuring signing..."
+          cd src
+          echo "RELEASE_STORE_FILE=./app/fongmi.jks" >> gradle.properties
+          echo "RELEASE_KEY_ALIAS=fongmi" >> gradle.properties
+          echo "RELEASE_STORE_PASSWORD=fongmi123" >> gradle.properties
+          echo "RELEASE_KEY_PASSWORD=fongmi123" >> gradle.properties
+          echo "✅ Signing configured"
+
       - name: Build release APKs
         if: steps.check_build.outputs.build_needed == 'true'
         run: |
           echo "🔨 Building release APKs..."
           cd src
-
           chmod +x gradlew
-
-          # Build release APK with signing
           ./gradlew assembleLeanbackRelease \
-            -Pandroid.injected.signing.store.file="app/fongmi.jks" \
-            -Pandroid.injected.signing.store.password="fongmi123" \
-            -Pandroid.injected.signing.key.alias="fongmi" \
-            -Pandroid.injected.signing.key.password="fongmi123" \
             --no-daemon \
             --stacktrace
-            
           echo "✅ APK build completed successfully"
-
-          # Clean up keystore for security
           rm -f app/fongmi.jks
           echo "🔐 Keystore cleaned up"
 
