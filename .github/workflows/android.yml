@@ -1,138 +1,191 @@
-name: Build FongMi TV & Mobile APK
+name: Build FongMi TV APK
 
 on:
+  schedule:
+    - cron: '0 13 1 * *'
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
+    inputs:
+      rebuild:
+        description: '忽略构建记录以重新构建'
+        required: false
+        type: boolean
+      donotpublish:
+        description: '构建后不提交发布新版'
+        required: false
+        type: boolean
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - userName: FongMi
+            repoName: TV
+            branchName: release
+            java_ver: 17
 
     steps:
-      - name: Checkout Source Code
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'zulu'
-          cache: 'gradle'
+          fetch-depth: 0
 
-      # 确保系统自带的 Python3 就绪
-      - name: Set up Python
+      - name: Check New Commit
+        run: |
+          upStream=https://github.com/${{ matrix.userName }}/${{ matrix.repoName }}
+          echo "upStream=$upStream" >> $GITHUB_ENV
+          
+          commit=$(curl -sL $upStream/commits/${{ matrix.branchName }} | grep -o "/${{ matrix.userName }}/${{ matrix.repoName }}/commit/[a-z0-9]\+" | head -1 | cut -d\/ -f5)
+          
+          if [[ -z "$commit" ]]; then
+            echo "方法1失败，尝试API获取..."
+            commit=$(curl -s "https://api.github.com/repos/${{ matrix.userName }}/${{ matrix.repoName }}/commits/${{ matrix.branchName }}?per_page=1" | jq -r '.sha // empty')
+          fi
+          
+          if [[ -z "$commit" ]]; then
+            echo "API也失败，直接克隆获取最新commit..."
+            git clone --depth=1 $upStream temp_repo
+            commit=$(cd temp_repo && git rev-parse HEAD)
+            rm -rf temp_repo
+          fi
+          
+          echo "获取到的commit: $commit"
+          
+          if [[ -z "$commit" ]]; then
+            echo "错误：无法获取commit hash"
+            exit 1
+          fi
+          
+          if ! grep -q "$commit" README.md 2>/dev/null || [ "${{ inputs.rebuild }}" == "true" ]; then
+            echo "commit=$commit" >> $GITHUB_ENV
+            echo "commitS=${commit:0:7}" >> $GITHUB_ENV
+            echo "需要构建"
+          else
+            echo "commit=$commit" >> $GITHUB_ENV
+            echo "无需构建，commit已存在"
+          fi
+
+      - name: Checkout Source Code
+        if: ${{ env.commitS }}
+        run: |
+          git clone --branch ${{ matrix.branchName }} ${{ env.upStream }} TVBox
+          cd TVBox
+          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd -1)" >> $GITHUB_ENV
+
+      - name: Setup Signing
+        if: ${{ env.commitS }}
+        working-directory: TVBox
+        run: |
+          # 自动生成临时签名密钥
+          keytool -genkey -v \
+            -keystore app/fongmi.jks \
+            -alias fongmi \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass fongmi123 \
+            -keypass fongmi123 \
+            -dname "CN=FongMi" \
+            -noprompt
+          
+          # 配置签名到 gradle.properties
+          echo "RELEASE_STORE_FILE=./app/fongmi.jks" >> gradle.properties
+          echo "RELEASE_KEY_ALIAS=fongmi" >> gradle.properties
+          echo "RELEASE_STORE_PASSWORD=fongmi123" >> gradle.properties
+          echo "RELEASE_KEY_PASSWORD=fongmi123" >> gradle.properties
+
+      - uses: actions/setup-java@v4
+        if: ${{ matrix.java_ver }}
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java_ver }}
+
+      - name: Setup Android SDK
+        if: ${{ env.commitS }}
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Python
+        if: ${{ env.commitS }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.8'
 
-      # 🛠️ 核心降级：放弃系统默认的高版本 NDK，强行安装谷歌官方最稳的 LTS 21 版本以契合 C/Python 编译
-      - name: Setup Android SDK & NDK 21
-        uses: android-actions/setup-android@v3
-        with:
-          log-accepted-android-sdk-licenses: false
-
-      - name: Install Legacy NDK
+      - name: Create local.properties
+        if: ${{ env.commitS }}
+        working-directory: TVBox
         run: |
-          sdkmanager --install "ndk;21.4.7075529"
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+          python_path=$(which python3)
+          if [ -z "$python_path" ]; then
+            python_path=$(which python)
+          fi
+          echo "buildPython=$python_path" >> local.properties
+          $python_path --version
 
-      # 全局递归修复所有子模块中可能硬编码的 Windows Python 路径
-      - name: Patch Hardcoded Python Path in All Modules
-        run: |
-          PYTHON_PATH=$(which python3)
-          echo "Real Linux Python Path: $PYTHON_PATH"
-          find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|D:/Programs/Python/Python38/python.exe|$PYTHON_PATH|g"
-          find . -name "build.gradle" -o -name "build.gradle.kts" | xargs sed -i "s|C:/.*python.exe|$PYTHON_PATH|g"
+      - uses: gradle/actions/setup-gradle@v4
+        if: ${{ env.commitS }}
 
-      # 全方位立体伪造签名环境，堵死所有 Null 转换漏洞
-      - name: Omnidirectional Mock Signing Environment
+      - name: Build With Gradle
+        if: ${{ env.commitS }}
+        working-directory: TVBox
         run: |
-          PYTHON_PATH=$(which python3)
-          touch mock.jks
-          touch app/mock.jks
+          chmod +x gradlew
+          ./gradlew assembleLeanbackRelease --build-cache --parallel --daemon --warning-mode all
+
+      - name: Prepare App
+        if: ${{ env.commitS }}
+        working-directory: TVBox
+        run: |
+          rm -rf apk/
+          mkdir -p apk/
           
-          read -r -d '' SIGN_PROPS << EOM || true
-          sdk.dir=$ANDROID_HOME
-          ndk.dir=$ANDROID_HOME/ndk/21.4.7075529
-          buildPython=$PYTHON_PATH
-          RELEASE_STORE_FILE=mock.jks
-          RELEASE_STORE_PASSWORD=mock_pwd
-          RELEASE_KEY_ALIAS=mock_alias
-          RELEASE_KEY_PASSWORD=mock_pwd
-          releaseStoreFile=mock.jks
-          releaseStorePassword=mock_pwd
-          releaseKeyAlias=mock_alias
-          releaseKeyPassword=mock_pwd
-          storeFile=mock.jks
-          storePassword=mock_pwd
-          keyAlias=mock_alias
-          keyPassword=mock_pwd
-          EOM
+          for file in $(find app/build/outputs/apk -name "*release*.apk" -print); do
+            base=$(basename "$file")
+            new_base=$(echo "$base" | sed "s/release/${{ env.tag }}/")
+            cp "$file" "apk/$new_base"
+          done
+
+      - name: Release Note
+        if: ${{ env.commitS }}
+        working-directory: TVBox
+        run: |
+          lastCommit=$(grep "${{ matrix.userName }}\/${{ matrix.repoName }}" ${{ github.workspace }}/README.md | grep -o '[a-z0-9]\{40\}' | head -1)
+          export LESSCHARSET=utf-8
+          echo -e "Credit: [${{ matrix.userName }}](${{ env.upStream }})\nCommit: ${{ env.commit }}\nChangelog:\n\`\`\`" > apk/${{ matrix.userName }}-Release.log
           
-          echo "$SIGN_PROPS" > local.properties
-          echo "$SIGN_PROPS" > app/local.properties
-          echo "$SIGN_PROPS" >> gradle.properties
-          echo "$SIGN_PROPS" >> app/gradle.properties
-          echo "$SIGN_PROPS" > release.properties
-          echo "$SIGN_PROPS" > app/release.properties
+          if [ -z "$lastCommit" ]; then
+            echo "首次构建" >> apk/${{ matrix.userName }}-Release.log
+            git log --pretty=format:%B -1 | sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' | cat -n | sort -k2,2 -k1,1n | uniq -f1 | sort -k1,1n | cut -f2- >> apk/${{ matrix.userName }}-Release.log
+          elif [ "${{ env.commit }}" == "${lastCommit}" ]; then
+            git log --pretty=format:%B -1 | sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' | cat -n | sort -k2,2 -k1,1n | uniq -f1 | sort -k1,1n | cut -f2- >> apk/${{ matrix.userName }}-Release.log
+          else
+            git log --pretty=format:%B ${{ env.commitS }}...${lastCommit:0:7} | sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' | cat -n | sort -k2,2 -k1,1n | uniq -f1 | sort -k1,1n | cut -f2- >> apk/${{ matrix.userName }}-Release.log
+          fi
+          echo -e '\n```' >> apk/${{ matrix.userName }}-Release.log
 
-      # 强行在所有配置库的地方注入官方公共源，防止 media3 等核心依赖下载失败
-      - name: Inject Reliable Maven Repositories
-        run: |
-          find . -name "build.gradle" -o -name "settings.gradle" | while read -r file; do
-            if grep -q "repositories {" "$file"; then
-              echo "Injecting global repositories into $file"
-              sed -i 's/repositories {/repositories {\n        google()\n        mavenCentral()/g' "$file"
-            fi
-          done
-
-      # 🛠️ 核心修复：强行重写所有模块的 NDK 版本声明，把整个项目的 NDK 编译基准全部拉齐到 NDK 21
-      - name: Force Align NDK Version
-        run: |
-          find . -name "build.gradle" | while read -r file; do
-            if grep -q "ndkVersion" "$file"; then
-              sed -i 's/ndkVersion.*/ndkVersion "21.4.7075529"/g' "$file"
-            fi
-          done
-
-      # 极致优化 Gradle 运行参数，增加超时上限与重试
-      - name: Optimize Gradle Properties
-        run: |
-          mkdir -p ~/.gradle
-          echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError" >> ~/.gradle/gradle.properties
-          echo "org.gradle.parallel=true" >> ~/.gradle/gradle.properties
-          echo "org.gradle.configureondemand=true" >> ~/.gradle/gradle.properties
-          echo "systemProp.http.socketTimeout=120000" >> ~/.gradle/gradle.properties
-          echo "systemProp.http.connectionTimeout=120000" >> ~/.gradle/gradle.properties
-
-      - name: Fix line endings for gradlew
-        run: sed -i 's/\r$//' gradlew
-
-      - name: Grant Execute Permission for Gradle
-        run: chmod +x gradlew
-
-      # 全量原生编译，通过极激进的依赖刷新强推通过
-      - name: Build with Gradle
-        run: |
-          ./gradlew assembleDebug \
-            -x lint -x test --no-daemon --stacktrace --refresh-dependencies
-
-      # 编译完成后，在 Actions 后台用 Linux 命令直接剥离 APK 内部的 x86 脂肪，实现完美瘦身
-      - name: Post-Build Slimming
-        if: success()
-        run: |
-          sudo apt-get install -y zip
-          find app/build/outputs/apk/ -name "*.apk" | while read -r apk; do
-            echo "正在剥离 x86 与 x86_64 架构以缩减体积: $apk"
-            zip -d "$apk" "lib/x86/*" "lib/x86_64/*" || true
-          done
-
-      # 100% 强制抓取上传最终的 APK 产物
-      - name: Upload All Built APKs
+      - name: Upload App To Artifact
         uses: actions/upload-artifact@v4
+        if: ${{ env.commitS }}
         with:
-          name: FongMi-TV-Slim-APKs
-          path: "**/build/outputs/apk/**/*.apk"
-          retention-days: 7
+          name: ${{ matrix.userName }}-${{ matrix.repoName }}
+          path: |
+            TVBox/apk/*
+
+      - name: Whether Or Not to Publish
+        if: ${{ inputs.donotpublish && env.commitS }}
+        run: |
+          echo "commit=" >> $GITHUB_ENV
+
+  clean:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete older workflow runs and artifacts
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 14
+          keep_minimum_runs: 10
