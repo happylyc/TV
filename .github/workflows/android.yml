@@ -1,8 +1,8 @@
-      - name: Generate signing keystore and configure
-        if: steps.check_build.outputs.build_needed == 'true'
-        run: |
-          echo "Generating temporary signing keystore..."
-          cd src
+- name: Generate signing keystore and configure
+  if: steps.check_build.outputs.build_needed == 'true'
+  run: |
+ echo "Generating temporary signing keystore..."
+  cd src
           
           # 生成签名密钥到项目根目录
           keytool -genkey -v \
