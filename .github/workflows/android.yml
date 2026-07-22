@@ -27,15 +27,26 @@ jobs:
       API_RETRY_DELAY: 5
 
     steps:
-      - name: Checkout the repository
+      # 拉取当前仓库（包含 workflow 和你修改过的 Gradle 文件）
+      - name: Checkout workflow repository
         uses: actions/checkout@v4
 
+      # 拉取要构建的源码（你的 fork）
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPO }}
           ref: ${{ env.SOURCE_BRANCH }}
           path: src
+
+      # 用你根目录改好的 Gradle 文件覆盖 src 里的同名文件
+      - name: Patch Gradle files into src
+        run: |
+          echo "Patching Gradle files..."
+          cp app/build.gradle src/app/build.gradle
+          mkdir -p src/gradle
+          cp gradle/libs.versions.toml src/gradle/libs.versions.toml
+          echo "Gradle files patched successfully."
 
       - name: Capture commit hashes
         id: commit_info
@@ -161,8 +172,6 @@ jobs:
         run: |
           echo "Generating temporary signing keystore..."
           cd src
-          
-          # 生成签名密钥
           keytool -genkey -v \
             -keystore app/fongmi.jks \
             -alias fongmi \
@@ -173,15 +182,11 @@ jobs:
             -keypass fongmi123 \
             -dname "CN=FongMi" \
             -noprompt
-          
-          # 写入 local.properties（app/build.gradle 读取这个文件！）
           echo "storeFile=app/fongmi.jks" >> local.properties
           echo "keyAlias=fongmi" >> local.properties
           echo "storePassword=fongmi123" >> local.properties
-          
           echo "=== local.properties signing config ==="
           grep -E "storeFile|keyAlias|storePassword" local.properties
-          
           echo "Keystore and local.properties configured"
 
       - name: Build release APKs
@@ -190,10 +195,7 @@ jobs:
           echo "Building release APKs..."
           cd src
           chmod +x gradlew
-          
-          # 构建所有 release variant（leanback arm64 + leanback armv7 + mobile）
           ./gradlew assembleRelease --no-daemon --stacktrace
-          
           echo "APK build completed successfully"
           rm -f app/fongmi.jks
           echo "Keystore cleaned up"
@@ -219,16 +221,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Summary
-        if: always()
-        run: |
-          echo "Build Summary"
-          echo "Repository: ${{ github.repository }}"
-          echo "Source: ${{ env.SOURCE_REPO }}@${{ env.SOURCE_BRANCH }}"
-          echo "Short Hash: ${{ steps.commit_info.outputs.short_hash }}"
-          if [ "${{ steps.check_build.outputs.build_needed }}" = "true" ]; then
-            echo "Status: Build Executed"
-            echo "Reason: ${{ steps.check_build.outputs.build_reason }}"
-          else
-            echo "Status: Build Skipped"
-            echo "Reason: ${{ steps.check_build.outputs.build_reason }}"
-          fi
+        if
