@@ -114,12 +114,12 @@ jobs:
             echo "build_reason=no_changes" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         if: steps.check_build.outputs.build_needed == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
-          java-version: "17"
+          java-version: "21"
           cache: "gradle"
 
       - name: Cache Gradle dependencies
@@ -156,7 +156,7 @@ jobs:
           echo "buildPython=$python_path" >> local.properties
           $python_path --version
 
-      - name: Generate signing keystore and inject signingConfigs
+      - name: Generate signing keystore and configure
         if: steps.check_build.outputs.build_needed == 'true'
         run: |
           echo "Generating temporary signing keystore..."
@@ -174,23 +174,15 @@ jobs:
             -dname "CN=FongMi" \
             -noprompt
           
-          # 创建临时文件包含 signingConfigs
-          echo '    signingConfigs {' > /tmp/signing.txt
-          echo '        release {' >> /tmp/signing.txt
-          echo '            storeFile file("fongmi.jks")' >> /tmp/signing.txt
-          echo '            storePassword "fongmi123"' >> /tmp/signing.txt
-          echo '            keyAlias "fongmi"' >> /tmp/signing.txt
-          echo '            keyPassword "fongmi123"' >> /tmp/signing.txt
-          echo '        }' >> /tmp/signing.txt
-          echo '    }' >> /tmp/signing.txt
+          # 写入 local.properties（app/build.gradle 读取这个文件！）
+          echo "storeFile=app/fongmi.jks" >> local.properties
+          echo "keyAlias=fongmi" >> local.properties
+          echo "storePassword=fongmi123" >> local.properties
           
-          # 在 android { 后插入
-          sed -i '/android {/r /tmp/signing.txt' app/build.gradle
+          echo "=== local.properties signing config ==="
+          grep -E "storeFile|keyAlias|storePassword" local.properties
           
-          echo "=== Check injected signingConfigs ==="
-          grep -A 8 "signingConfigs" app/build.gradle
-          
-          echo "Keystore generated and signingConfigs injected"
+          echo "Keystore and local.properties configured"
 
       - name: Build release APKs
         if: steps.check_build.outputs.build_needed == 'true'
