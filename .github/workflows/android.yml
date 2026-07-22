@@ -21,7 +21,7 @@ jobs:
         shell: bash
 
     env:
-      SOURCE_REPO: "FongMi/TV"
+      SOURCE_REPO: "happylyc/TV"
       SOURCE_BRANCH: "fongmi"
       API_RETRY_COUNT: 3
       API_RETRY_DELAY: 5
