@@ -190,7 +190,10 @@ jobs:
           echo "Building release APKs..."
           cd src
           chmod +x gradlew
-          ./gradlew assembleLeanbackRelease --no-daemon --stacktrace
+          
+          # 构建所有 release variant（leanback arm64 + leanback armv7 + mobile）
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          
           echo "APK build completed successfully"
           rm -f app/fongmi.jks
           echo "Keystore cleaned up"
