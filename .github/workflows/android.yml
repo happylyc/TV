@@ -1,192 +1,134 @@
-name: Build
+name: Build TV APK
 
 on:
   workflow_dispatch:
-    inputs:
-      force_build:
-        description: "Force build even if no changes detected"
-        required: false
-        default: false
-        type: boolean
+
+  schedule:
+    - cron: "0 2 * * *"
+
 
 permissions:
   contents: write
-  actions: write
+
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
 
-    env:
-      SOURCE_REPO: "happylyc/TV"
-      SOURCE_BRANCH: "fongmi"
-      API_RETRY_COUNT: 3
-      API_RETRY_DELAY: 5
+  build:
+
+    runs-on: ubuntu-latest
+
 
     steps:
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
 
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.SOURCE_REPO }}
-          ref: ${{ env.SOURCE_BRANCH }}
-          path: src
+    # 拉源码
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Patch Gradle files into src
-        run: |
-          echo "Patching Gradle files..."
-          cp app/build.gradle src/app/build.gradle
-          mkdir -p src/gradle
-          cp gradle/libs.versions.toml src/gradle/libs.versions.toml
-          echo "Gradle files patched successfully."
 
-      - name: Capture commit hashes
-        id: commit_info
-        run: |
-          cd src
-          SHORT_HASH=$(git rev-parse --short HEAD)
-          FULL_HASH=$(git rev-parse HEAD)
-          COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y%m%d-%H%M')
-          echo "short_hash=$SHORT_HASH" >> "$GITHUB_OUTPUT"
-          echo "full_hash=$FULL_HASH" >> "$GITHUB_OUTPUT"
-          echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
+    # Java 21
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: 21
 
-      - name: Check if build is needed
-        id: check_build
-        run: |
-          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
-            echo "build_needed=true" >> "$GITHUB_OUTPUT"
-            echo "is_first_release=false" >> "$GITHUB_OUTPUT"
-            echo "build_reason=force_build" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
-          latest_tag=""
-          retry_count=0
-          while [ $retry_count -lt $API_RETRY_COUNT ]; do
-            response=$(curl -s -w "%{http_code}" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/latest")
-            http_code="${response: -3}"
-            json_response="${response%???}"
+    # Gradle缓存
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
 
-            if [ "$http_code" = "200" ]; then
-              latest_tag=$(echo "$json_response" | jq -r '.tag_name // "none"')
-              break
-            elif [ "$http_code" = "404" ]; then
-              latest_tag="none"
-              break
-            else
-              retry_count=$((retry_count + 1))
-              sleep $API_RETRY_DELAY
-            fi
-          done
 
-          current_hash="${{ steps.commit_info.outputs.short_hash }}"
+    # Android SDK
+    - name: Setup Android
+      uses: android-actions/setup-android@v3
 
-          if [ "$latest_tag" = "none" ]; then
-            echo "build_needed=true" >> "$GITHUB_OUTPUT"
-            echo "is_first_release=true" >> "$GITHUB_OUTPUT"
-            echo "build_reason=first_release" >> "$GITHUB_OUTPUT"
-          elif [ "$latest_tag" != "$current_hash" ]; then
-            echo "build_needed=true" >> "$GITHUB_OUTPUT"
-            echo "is_first_release=false" >> "$GITHUB_OUTPUT"
-            echo "build_reason=code_changes" >> "$GITHUB_OUTPUT"
-          else
-            echo "build_needed=false" >> "$GITHUB_OUTPUT"
-            echo "is_first_release=false" >> "$GITHUB_OUTPUT"
-            echo "build_reason=no_changes" >> "$GITHUB_OUTPUT"
-          fi
 
-      - name: Set up JDK 21
-        if: steps.check_build.outputs.build_needed == 'true'
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "21"
-          cache: "gradle"
+    - name: Accept SDK License
+      run: |
+        yes | sdkmanager --licenses || true
 
-      - name: Cache Gradle dependencies
-        if: steps.check_build.outputs.build_needed == 'true'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-            ~/.android/build-cache
-          key: ${{ runner.os }}-gradle-${{ hashFiles('src/**/*.gradle*', 'src/**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
 
-      - name: Setup Android SDK
-        if: steps.check_build.outputs.build_needed == 'true'
-        uses: android-actions/setup-android@v3
+    # 生成固定签名
+    - name: Create Keystore
+      run: |
 
-      - name: Setup Python
-        if: steps.check_build.outputs.build_needed == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        if [ ! -f release.jks ]; then
 
-      - name: Create local.properties
-        if: steps.check_build.outputs.build_needed == 'true'
-        run: |
-          cd src
-          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
-          python_path=$(which python3)
-          echo "buildPython=$python_path" >> local.properties
+        keytool \
+        -genkeypair \
+        -v \
+        -keystore release.jks \
+        -alias release \
+        -keyalg RSA \
+        -keysize 2048 \
+        -validity 10000 \
+        -storepass 123456 \
+        -keypass 123456 \
+        -dname "CN=TV,O=FongMi,C=CN"
 
-      - name: Generate signing keystore
-        if: steps.check_build.outputs.build_needed == 'true'
-        run: |
-          cd src
-          keytool -genkey -v \
-            -keystore app/fongmi.jks \
-            -alias fongmi \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass fongmi123 \
-            -keypass fongmi123 \
-            -dname "CN=FongMi" \
-            -noprompt
+        fi
 
-          echo "storeFile=app/fongmi.jks" >> local.properties
-          echo "keyAlias=fongmi" >> local.properties
-          echo "storePassword=fongmi123" >> local.properties
 
-      - name: Build release APKs
-        if: steps.check_build.outputs.build_needed == 'true'
-        run: |
-          cd src
-          chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
-          rm -f app/fongmi.jks
 
-      - name: Create GitHub Release
-        if: steps.check_build.outputs.build_needed == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.commit_info.outputs.short_hash }}
-          name: "FongMi TV ${{ steps.commit_info.outputs.short_hash }}"
-          body: |
-            Build Information:
-            - Commit Hash: ${{ steps.commit_info.outputs.short_hash }}
-            - Commit Date: ${{ steps.commit_info.outputs.commit_date }}
-            - Build Reason: ${{ steps.check_build.outputs.build_reason }}
-          files: src/**/build/outputs/apk/**/release/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # 生成local.properties
+    - name: Create local.properties
+      run: |
 
-      - name: Build Summary
-        if: always()
-        run: |
-          echo "Build Summary"
-          echo "Source: ${{ env.SOURCE_REPO }}@${{ env.SOURCE_BRANCH }}"
-          echo "Short Hash: ${{ steps.commit_info.outputs.short_hash }}"
-          echo "Build Needed: ${{ steps.check_build.outputs.build_needed }}"
-          echo "Reason: ${{ steps.check_build.outputs.build_reason }}"
+        cat > local.properties <<EOF
+
+sdk.dir=$ANDROID_HOME
+
+storeFile=$GITHUB_WORKSPACE/release.jks
+
+storePassword=123456
+
+keyAlias=release
+
+keyPassword=123456
+
+EOF
+
+
+
+    # gradle权限
+    - name: Permission
+      run: chmod +x gradlew
+
+
+
+    # 编译全部Release
+    - name: Build Release
+      run: |
+
+        ./gradlew \
+        assembleRelease \
+        --stacktrace \
+        --no-daemon
+
+
+
+    # 上传APK
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+
+        name: TV-release
+
+        path: |
+
+          app/build/outputs/apk/**/release/*.apk
+
+
+
+    # 发布Release
+    - name: Github Release
+      uses: softprops/action-gh-release@v2
+      with:
+
+        tag_name: build-${{ github.run_number }}
+
+        name: TV Build ${{ github.run_number }}
+
+        files: |
+
+          app/build/outputs/apk/**/release/*.apk
