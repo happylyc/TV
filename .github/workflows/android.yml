@@ -1,7 +1,9 @@
-name: Build TV APK
+name: Build TV Leanback
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
 
 permissions:
   contents: write
@@ -10,116 +12,78 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      SOURCE_REPO: "FongMi/TV"
+      SOURCE_BRANCH: "leanback"
+
     steps:
-      - name: Checkout
+      - name: Checkout self repo
         uses: actions/checkout@v4
 
-      - name: Setup Java 21
+      - name: Checkout FongMi TV leanback
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_BRANCH }}
+          path: src
+
+      - name: Generate keystore automatically
+        run: |
+          echo "🔐 Generating keystore..."
+          keytool -genkeypair \
+            -v \
+            -keystore keystore.jks \
+            -alias release \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass 123456 \
+            -keypass 123456 \
+            -dname "CN=TV,O=FongMi,C=CN"
+          echo "Keystore generated."
+
+      - name: Setup JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 17
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      # Python 3.10（Chaquopy 必须）
       - name: Setup Python 3.10
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      # pip 依赖（如果有 requirements.txt）
-      - name: Install Python dependencies
+      - name: Prepare local.properties
         run: |
-          python -m pip install --upgrade pip
-          if [ -f app/src/main/python/requirements.txt ]; then
-            pip install -r app/src/main/python/requirements.txt
-          fi
-
-      # libpython3.10.so（Chaquopy 需要）
-      - name: Install Python shared library
-        run: sudo apt-get install -y libpython3.10
-
-      # 设置 Chaquopy Python Home
-      - name: Set Chaquopy Python Home
-        run: echo "CHAQUOPY_PYTHON=python3.10" >> $GITHUB_ENV
-
-      # 释放磁盘空间（Chaquopy 编译很占空间）
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          
-          sudo rm -rf /opt/ghc
-
-      # Android SDK
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: ""
-
-      - name: Clean Android Cache
-        run: rm -rf ~/.android/cache || true
-
-      - name: Accept Android Licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Install Android SDK Packages
-        run: |
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "platforms;android-36" \
-            "build-tools;35.0.0" \
-            "build-tools;36.0.0"
-
-      # 自动生成签名
-      - name: Generate Release Keystore
-        run: |
-          if [ ! -f release.jks ]; then
-            keytool \
-              -genkeypair \
-              -v \
-              -keystore release.jks \
-              -alias release \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass 123456 \
-              -keypass 123456 \
-              -dname "CN=TV,O=FongMi,C=CN"
-          fi
-
-      # local.properties
-      - name: Generate local.properties
-        run: |
-          cat > local.properties <<EOF
-          sdk.dir=$ANDROID_HOME
-          storeFile=$GITHUB_WORKSPACE/release.jks
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          cat > src/local.properties <<EOF
+          sdk.dir=$SDK_DIR
+          storeFile=$GITHUB_WORKSPACE/keystore.jks
           storePassword=123456
           keyAlias=release
           keyPassword=123456
           EOF
 
-      - name: Grant Gradle Permission
-        run: chmod +x gradlew
+      - name: Build APK
+        run: |
+          cd src
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/keystore.jks" \
+            -Pandroid.injected.signing.store.password="123456" \
+            -Pandroid.injected.signing.key.alias="release" \
+            -Pandroid.injected.signing.key.password="123456" \
+            --no-daemon --stacktrace
 
-      # 编译 Release
-      - name: Build Release APK
-        run: ./gradlew assembleRelease --stacktrace --no-daemon
-
-      - name: List APK
-        run: find app/build/outputs/apk -name "*.apk"
-
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TV-release
-          path: app/build/outputs/apk/**/*.apk
+          name: TV-Leanback
+          path: src/**/build/outputs/apk/**/release/*.apk
 
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: TV Build ${{ github.run_number }}
-          files: app/build/outputs/apk/**/*.apk
+          name: "TV Leanback Build ${{ github.run_number }}"
+          files: src/**/build/outputs/apk/**/release/*.apk
