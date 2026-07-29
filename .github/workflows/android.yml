@@ -1,89 +1,187 @@
-name: Build
+name: Build TV APK
+
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 * * * *"
+
+  push:
+    branches:
+      - main
+
 
 permissions:
   contents: write
 
+
+env:
+  JAVA_VERSION: 21
+
+
 jobs:
+
   build:
+
     runs-on: ubuntu-latest
 
-    env:
-      SOURCE_REPO: "FongMi/TV"
-      SOURCE_BRANCH: "leanback"
 
     steps:
-      - name: Checkout self repo
-        uses: actions/checkout@v6
 
-      - name: Checkout FongMi TV leanback
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.SOURCE_REPO }}
-          ref: ${{ env.SOURCE_BRANCH }}
-          path: src
 
-      - name: Generate keystore automatically
-        run: |
-          echo "🔐 Generating keystore..."
-          keytool -genkeypair \
-            -v \
-            -keystore keystore.jks \
-            -alias release \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass 123456 \
-            -keypass 123456 \
-            -dname "CN=TV,O=FongMi,C=CN"
-          echo "Keystore generated."
+    # 拉取源码
+    - name: Checkout Source
+      uses: actions/checkout@v4
 
-      - name: Setup JDK
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
 
-      - name: Setup Python 3.10
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10"
 
-      - name: Prepare local.properties
-        run: |
-          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          cat > src/local.properties <<EOF
-          sdk.dir=$SDK_DIR
-          storeFile=$GITHUB_WORKSPACE/keystore.jks
-          storePassword=123456
-          keyAlias=release
-          keyPassword=123456
-          EOF
+    # Java 21
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ env.JAVA_VERSION }}
+        cache: gradle
 
-      - name: Build APK
-        run: |
-          cd src
-          chmod +x gradlew
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/keystore.jks" \
-            -Pandroid.injected.signing.store.password="123456" \
-            -Pandroid.injected.signing.key.alias="release" \
-            -Pandroid.injected.signing.key.password="123456" \
-            --no-daemon --stacktrace
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: TV-Leanback
-          path: src/**/build/outputs/apk/**/release/*.apk
 
-      - name: Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: "TV Leanback Build ${{ github.run_number }}"
-          files: src/**/build/outputs/apk/**/release/*.apk
+    # Gradle缓存
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+
+
+
+    # Android SDK
+    # 不安装 Emulator
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        packages: ""
+
+
+
+    # 清理可能损坏的SDK缓存
+    - name: Clean Android Cache
+      run: |
+        rm -rf ~/.android/cache || true
+
+
+
+    # 接受License
+    - name: Accept Android License
+      run: |
+        yes | sdkmanager --licenses || true
+
+
+
+    # 安装编译需要组件
+    - name: Install Android Packages
+      run: |
+
+        sdkmanager \
+        "platform-tools" \
+        "platforms;android-35" \
+        "platforms;android-36" \
+        "build-tools;35.0.0" \
+        "build-tools;36.0.0"
+
+
+
+    # 创建签名
+    # 第一次生成
+    - name: Generate Keystore
+      run: |
+
+        if [ ! -f release.jks ]; then
+
+          keytool \
+          -genkeypair \
+          -v \
+          -keystore release.jks \
+          -alias release \
+          -keyalg RSA \
+          -keysize 2048 \
+          -validity 10000 \
+          -storepass 123456 \
+          -keypass 123456 \
+          -dname "CN=TV,O=FongMi,C=CN"
+
+        fi
+
+
+
+    # 生成Android签名配置
+    - name: Create local.properties
+      run: |
+
+        cat > local.properties <<EOF
+        sdk.dir=$ANDROID_HOME
+        storeFile=$GITHUB_WORKSPACE/release.jks
+        storePassword=123456
+        
+        keyAlias=release
+        keyPassword=123456
+        EOF
+
+
+
+    # Gradle权限
+    - name: Gradle Permission
+      run: |
+
+        chmod +x gradlew
+
+
+
+    # 查看环境
+    - name: Environment Info
+      run: |
+
+        java -version
+
+        ./gradlew --version
+
+
+
+    # 编译
+    - name: Build Release
+      run: |
+
+        ./gradlew \
+        assembleRelease \
+        --stacktrace \
+        --no-daemon
+
+
+
+    # 查看APK
+    - name: Find APK
+      run: |
+
+        find . -name "*.apk"
+
+
+
+    # 上传产物
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+
+        name: TV-release-${{ github.run_number }}
+
+        path:
+
+          **/*.apk
+
+
+
+    # 创建Release
+    - name: Create Github Release
+      uses: softprops/action-gh-release@v2
+      with:
+
+        tag_name: v${{ github.run_number }}
+
+        name: TV Build v${{ github.run_number }}
+
+        files: |
+
+          **/*.apk
