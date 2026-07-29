@@ -168,8 +168,7 @@ jobs:
         name: TV-release-${{ github.run_number }}
 
         path:
-
-          **/*.apk
+         **/*.apk
 
 
 
@@ -183,5 +182,4 @@ jobs:
         name: TV Build v${{ github.run_number }}
 
         files: |
-
-          **/*.apk
+         **/*.apk
