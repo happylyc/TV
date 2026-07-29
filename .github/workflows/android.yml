@@ -14,16 +14,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Java 21
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
-      # Gradle 9.6.1 缓存
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      # Python 3.10（Chaquopy 必须）
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # pip 依赖（如果有 requirements.txt）
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f app/src/main/python/requirements.txt ]; then
+            pip install -r app/src/main/python/requirements.txt
+          fi
+
+      # libpython3.10.so（Chaquopy 需要）
+      - name: Install Python shared library
+        run: sudo apt-get install -y libpython3.10
+
+      # 设置 Chaquopy Python Home
+      - name: Set Chaquopy Python Home
+        run: echo "CHAQUOPY_PYTHON=python3.10" >> $GITHUB_ENV
+
+      # 释放磁盘空间（Chaquopy 编译很占空间）
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
 
       # Android SDK
       - name: Setup Android SDK
@@ -37,7 +64,6 @@ jobs:
       - name: Accept Android Licenses
         run: yes | sdkmanager --licenses || true
 
-      # 安装 SDK
       - name: Install Android SDK Packages
         run: |
           sdkmanager \
@@ -82,18 +108,15 @@ jobs:
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace --no-daemon
 
-      # 显示 APK
       - name: List APK
         run: find app/build/outputs/apk -name "*.apk"
 
-      # 上传 APK
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TV-release
           path: app/build/outputs/apk/**/*.apk
 
-      # 创建 Release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
