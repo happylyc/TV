@@ -76,17 +76,17 @@ jobs:
 
         cat > local.properties <<EOF
 
-sdk.dir=$ANDROID_HOME
+         sdk.dir=$ANDROID_HOME
 
-storeFile=$GITHUB_WORKSPACE/release.jks
+         storeFile=$GITHUB_WORKSPACE/release.jks
 
-storePassword=123456
+         storePassword=123456
 
-keyAlias=release
+          keyAlias=release
 
-keyPassword=123456
+          keyPassword=123456
 
-EOF
+          EOF
 
 
 
